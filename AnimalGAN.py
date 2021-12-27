@@ -21,7 +21,8 @@ class AnimalGAN:
         self.discriminator = self.build_discriminator(discriminator_input_shape,
                                 discriminator_leakyReLU_alpha,
                                 discriminator_learning_rate)
-        self.generator = self.build_generator()
+        # self.generator = self.build_generator()
+        # self.GAN = self.build_GAN(self.generator, self.discriminator)
 
     def build_generator(self):
         """
@@ -90,6 +91,14 @@ class AnimalGAN:
                     metrics=['accuracy'])
 	    
         return model
+
+    def model_summary(self):
+        """
+        Print the model summary.
+        """
+        print(self.discriminator.summary())
+        # print(self.generator.summary())
+        # print(self.GAN.summary())
 
     def train(self):
         """
