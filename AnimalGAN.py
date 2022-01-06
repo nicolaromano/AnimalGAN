@@ -4,6 +4,7 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow.keras as keras
 from tqdm import tqdm
+import shutil
 class AnimalGAN:
     """
     A class to generate our GAN. This takes care of everything, including
@@ -11,12 +12,7 @@ class AnimalGAN:
     """
 
     def __init__(self,
-                 discriminator_input_shape: tuple,
-                 generator_input_shape: tuple,
-                 generator_output_shape: tuple,
-                 discriminator_leakyReLU_alpha: float = 0.2,
-                 discriminator_learning_rate: float = 0.0002,
-                 generator_learning_rate: float = 0.0002,
+                 input_shape: tuple,
                  latent_dim: int = 100):
         """
         Initialize the GAN.
@@ -24,10 +20,9 @@ class AnimalGAN:
 
         self.latent_dim = latent_dim
         self.batch_size = 1
+        self.image_size = (input_shape[0], input_shape[1])
         self.train_ds = None  # This will be set by the train method.
-        self.discriminator = self.__build_discriminator(discriminator_input_shape,
-                                                        discriminator_leakyReLU_alpha,
-                                                        discriminator_learning_rate)
+        self.discriminator = self.__build_discriminator(input_shape)
         generator_initial_shape = tuple(
             self.discriminator.layers[-4].output.shape[1:])
 
@@ -62,9 +57,7 @@ class AnimalGAN:
             3, (5, 5), strides=(2, 2), padding='same', activation='tanh'))
         return model
 
-    def __build_discriminator(self, input_shape: tuple,
-                              leakyReLU_alpha: float = 0.2,
-                              learning_rate: float = 0.0002) -> keras.Model:
+    def __build_discriminator(self, input_shape: tuple) -> keras.Model:
         """
         Build the discriminator network.
 
@@ -76,8 +69,6 @@ class AnimalGAN:
         layers.
 
         param input_shape: The shape of the input.
-        param leakyReLU_alpha: The alpha value for the leaky ReLU.
-        param learning_rate: The learning rate for the optimizer.
         return: The discriminator network.
         """
 
@@ -89,35 +80,35 @@ class AnimalGAN:
         model.add(keras.layers.Conv2D(filters=64,
                                       kernel_size=(5, 5),
                                       padding='same'))
-        model.add(keras.layers.LeakyReLU(alpha=leakyReLU_alpha))
+        model.add(keras.layers.LeakyReLU(alpha=0.2))
         model.add(keras.layers.MaxPool2D(pool_size=(2, 2)))
 
         # Second convolutional layer
         model.add(keras.layers.Conv2D(filters=64,
                                       kernel_size=(5, 5),
                                       padding='same'))
-        model.add(keras.layers.LeakyReLU(alpha=leakyReLU_alpha))
+        model.add(keras.layers.LeakyReLU(alpha=0.2))
         model.add(keras.layers.MaxPool2D(pool_size=(2, 2)))
 
         # Third convolutional layer
         model.add(keras.layers.Conv2D(filters=128,
                                       kernel_size=(5, 5),
                                       padding='same'))
-        model.add(keras.layers.LeakyReLU(alpha=leakyReLU_alpha))
+        model.add(keras.layers.LeakyReLU(alpha=0.2))
         model.add(keras.layers.MaxPool2D(pool_size=(2, 2)))
 
         # Fourth convolutional layer
         model.add(keras.layers.Conv2D(filters=128,
                                       kernel_size=(5, 5),
                                       padding='same'))
-        model.add(keras.layers.LeakyReLU(alpha=leakyReLU_alpha))
+        model.add(keras.layers.LeakyReLU(alpha=0.2))
         model.add(keras.layers.MaxPool2D(pool_size=(2, 2)))
 
         model.add(keras.layers.Flatten())
         model.add(keras.layers.Dropout(0.4))
         model.add(keras.layers.Dense(1, activation='sigmoid'))
 
-        opt = keras.optimizers.Adam(learning_rate=learning_rate, beta_1=0.5)
+        opt = keras.optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
         model.compile(loss='binary_crossentropy',
                       optimizer=opt,
                       metrics=['accuracy'])
@@ -180,6 +171,7 @@ class AnimalGAN:
         images = None
     
         for image, _ in images_batch:
+            image =  (image - 127.5) / 127.5
             images = image if images is None else np.concatenate((images, image))
 
         labels = np.ones((images.shape[0], 1))
@@ -203,7 +195,11 @@ class AnimalGAN:
 
     def train(self, training_images_dir: str,
               epochs: int, batch_size: int = 50,
-              output_filename: str = None,
+              output_dir: str = './output',
+              continue_training: bool = False,
+              starting_epoch: int = 0,
+              saved_model_dir: str = None,
+              model_name: str = None,
               plot_loss: bool = True,
               save_images: bool = True) -> None:
         """
@@ -213,7 +209,11 @@ class AnimalGAN:
         param: training_images_dir: The directory containing the training images.
         param: epochs: The number of epochs to train.
         param: batch_size: The batch size to use.
-        param: output_filename: The filename to save the model to. Defaults to None.
+        param: output_dir: The directory to save the output (images and models).
+        param: continue_training: Whether to continue training from a previous model.
+        param: starting_epoch: The epoch to start training from (this is just for the file name)
+        param: saved_model_dir: The directory containing the saved model. Only used if continue_training is True.
+        param: model_name: The name of the model. This will have the current epoch appended to it. Only the last model will be kept.
         param: plot_loss: Whether to plot the loss (of the last batch in each epoch). Defaults to True.
         param: save_images: Whether to save an example image at the end of each epoch. Defaults to True.
         """
@@ -222,15 +222,24 @@ class AnimalGAN:
 
         # Load the training images
         self.train_ds = keras.utils.image_dataset_from_directory(training_images_dir,
+                                                                 image_size = self.image_size,
                                                                  batch_size=batch_size//2,
                                                                  shuffle=True)
 
-        discriminator_loss_1 = np.zeros((epochs, 1))
-        discriminator_loss_2 = np.zeros((epochs, 1))
-        generator_loss = np.zeros((epochs, 1))
+        if continue_training:
+            # Load the saved models
+            self.generator = keras.models.load_model(os.path.join(saved_model_dir, model_name + '_generator.h5'))
+            self.GAN = keras.models.load_model(os.path.join(saved_model_dir, model_name + '_GAN.h5'))
+            # Extract the discriminator from the GAN
+            self.discriminator = self.GAN.layers[-1]
+            self.discriminator.trainable = True
 
-        for e in range(epochs):
-            for b in tqdm(range(len(self.train_ds)), desc=f"Epoch {e+1}/{epochs}"):
+        discriminator_loss_1 = np.zeros(epochs)
+        discriminator_loss_2 = np.zeros(epochs)
+        generator_loss = np.zeros(epochs)
+
+        for e in range(starting_epoch, starting_epoch + epochs):
+            for _ in tqdm(range(len(self.train_ds)), desc=f"Epoch {e+1}/{epochs}"):
                 X_real, y_real = self.__get_real_samples()
                 discriminator_loss_1[e], _ = self.discriminator.train_on_batch(
                     X_real, y_real)
@@ -243,12 +252,21 @@ class AnimalGAN:
 
             if save_images:
                 image = self.generate_image()
-                plt.imsave(f"GAN_output_epoch_{e}.png", image)
+                plt.imsave(f"{output_dir}/GAN_output_epoch_{e}.png", image)
 
-            if output_filename is not None:
-                self.GAN.save(f"{output_filename}_epoch_{e+1}_GAN")
-                self.generator.save(f"{output_filename}_epoch_{e+1}_generator")
-        
+            if output_dir is not None and model_name is not None:
+                self.GAN.save(f"{output_dir}/{model_name}_epoch_{e+1}_GAN")
+                self.generator.save(f"{output_dir}/{model_name}_epoch_{e+1}_generator")
+                # Delete the previous model, if it exists
+                if os.path.exists(f"{output_dir}/{model_name}_epoch_{e}_GAN"):
+                    shutil.rmtree(f"{output_dir}/{model_name}_epoch_{e}_GAN")
+                if os.path.exists(f"{output_dir}/{model_name}_epoch_{e}_generator"):
+                    shutil.rmtree(f"{output_dir}/{model_name}_epoch_{e}_generator")
+
+            print(f"Discriminator loss: {discriminator_loss_1[-1]}")
+            print(f"Discriminator loss: {discriminator_loss_2[-1]}")
+            print(f"Generator loss: {generator_loss[-1]}")
+
         if plot_loss:
             plt.plot(self.discriminator_loss_1, label='Discriminator loss 1')
             plt.plot(self.discriminator_loss_2, label='Discriminator loss 2')
@@ -263,4 +281,4 @@ class AnimalGAN:
         """
 
         latent_vector = self.__latent_samples(1)
-        return self.generator.predict(latent_vector)
+        return self.generator.predict(latent_vector)[0]/2+0.5
