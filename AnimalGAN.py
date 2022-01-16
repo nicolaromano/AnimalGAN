@@ -1,10 +1,11 @@
-import numpy as np
-import matplotlib.pyplot as plt
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-import tensorflow.keras as keras
-from tqdm import tqdm
 import shutil
+from tqdm import tqdm
+import tensorflow.keras as keras
+import numpy as np
+import matplotlib.pyplot as plt
+
 class AnimalGAN:
     """
     A class to generate our GAN. This takes care of everything, including
@@ -31,31 +32,43 @@ class AnimalGAN:
 
         self.GAN = self.__build_GAN(self.generator, self.discriminator)
 
-    def __build_generator(self, latent_dim, initial_shape):
+    def __build_generator(self, latent_dim, initial_shape, num_classes):
         """
-        Build the generator network.
+        Build the conditional generator network.        
 
-        The generator network takes a latent vector as input and generates
-        an image.
+        The generator network takes a latent vector and a label as inputs and
+        outputs an image. 
 
         param latent_dim: The latent vector dimension.
         param initial_shape: The shape of the first feature layer.
         return: The generator network.
         """
 
-        model = keras.Sequential()
-        model.add(keras.layers.Dense(
-            np.prod(initial_shape), input_dim=latent_dim))
-        model.add(keras.layers.LeakyReLU(alpha=0.2))
-        model.add(keras.layers.Reshape(initial_shape))
+        # The label of our class
+        label_input = keras.layers.Input(shape=(1,), name='label_input')
+        # Put the label into an embedding layer
+        embedding = keras.layers.Embedding(
+            num_classes, latent_dim)(label_input)
+        dense = keras.layers.Dense(
+            initial_shape[0], initial_shape[1], 1)(embedding)
+
+        # Concatenate the label with the latent vector
+        latent_input = keras.layers.Input(shape=(latent_dim,))
+        dense2 = keras.layers.Dense(
+            np.prod(initial_shape), input_dim=latent_dim)(latent_input)
+        dense2 = keras.layers.LeakyReLU(alpha=0.2)(dense2)
+        reshape = keras.layers.Reshape(initial_shape)(dense2)
         # Scale up
         for i in range(3):
-            model.add(keras.layers.Conv2DTranspose(
-                int(initial_shape[2] / 2**i), (5, 5), strides=(2, 2), padding='same'))
-            model.add(keras.layers.LeakyReLU(alpha=0.2))
-        model.add(keras.layers.Conv2DTranspose(
-            3, (5, 5), strides=(2, 2), padding='same', activation='tanh'))
-        return model
+            reshape = keras.layers.Conv2DTranspose(
+                int(initial_shape[2] / 2**i), (5, 5), strides=(2, 2), padding='same')(reshape)
+            reshape = keras.layers.LeakyReLU(alpha=0.2)(reshape)
+            # Upsample
+            convtr = keras.layers.Conv2DTranspose(
+                3, (5, 5), strides=(2, 2), padding='same', activation='sigmoid')(reshape)
+
+        # Return the model
+        return keras.models.Model(inputs=[latent_input, label_input], outputs=convtr)
 
     def __build_discriminator(self, input_shape: tuple, num_classes: int) -> keras.Model:
         """
@@ -78,25 +91,30 @@ class AnimalGAN:
         # Put the label into an embedding layer
         embedding = keras.layers.Embedding(
             num_classes, self.latent_dim)(label_input)
-        dense = keras.layers.Dense(input_shape[0], input_shape[1], 1)(embedding)
+        dense = keras.layers.Dense(
+            input_shape[0], input_shape[1], 1)(embedding)
         # Concatenate the label with the image
         model_input = keras.layers.Input(shape=input_shape)
         merged = keras.layers.concatenate([model_input, dense])
 
         # First convolutional layer
-        conv1 = keras.layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same')(merged)
+        conv1 = keras.layers.Conv2D(
+            64, (5, 5), strides=(2, 2), padding='same')(merged)
         conv1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
         pool1 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2))(conv1)
         # Second convolutional layer
-        conv2 = keras.layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same')(pool1)
+        conv2 = keras.layers.Conv2D(
+            64, (5, 5), strides=(2, 2), padding='same')(pool1)
         conv2 = keras.layers.LeakyReLU(alpha=0.2)(conv2)
         pool2 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2))(conv2)
         # Third convolutional layer
-        conv3 = keras.layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same')(pool2)
+        conv3 = keras.layers.Conv2D(
+            128, (5, 5), strides=(2, 2), padding='same')(pool2)
         conv3 = keras.layers.LeakyReLU(alpha=0.2)(conv3)
         pool3 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2))(conv3)
         # Fourth convolutional layer
-        conv4 = keras.layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same')(pool3)
+        conv4 = keras.layers.Conv2D(
+            128, (5, 5), strides=(2, 2), padding='same')(pool3)
         conv4 = keras.layers.LeakyReLU(alpha=0.2)(conv4)
         pool4 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2))(conv4)
         # Flatten the output
@@ -127,10 +145,13 @@ class AnimalGAN:
         # The discriminator is still trained separately, but won't be
         # affected when training the GAN.
         discriminator.trainable = False
-        model = keras.Sequential()
-        model.add(generator)
-        model.add(discriminator)
 
+        gen_noise, gen_label = generator.input
+        gen_output = generator.output
+
+        model = keras.Model(
+            inputs=[gen_noise, gen_label], outputs=gen_output)
+        
         opt = keras.optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
         model.compile(loss='binary_crossentropy', optimizer=opt)
 
@@ -167,10 +188,11 @@ class AnimalGAN:
         images_batch = self.train_ds.take(1)
 
         images = None
-    
+
         for image, _ in images_batch:
-            image =  image / 255.0
-            images = image if images is None else np.concatenate((images, image))
+            image = image / 255.0
+            images = image if images is None else np.concatenate(
+                (images, image))
 
         # Put some noise in the labels (random number between 0.9 and 1)
         labels = np.random.random(size=(images.shape[0], 1)) * 0.1 + 0.9
@@ -225,14 +247,16 @@ class AnimalGAN:
 
         # Load the training images
         self.train_ds = keras.utils.image_dataset_from_directory(training_images_dir,
-                                                                 image_size = self.image_size,
+                                                                 image_size=self.image_size,
                                                                  batch_size=batch_size//2,
                                                                  shuffle=True)
 
         if continue_training:
             # Load the saved models
-            self.generator = keras.models.load_model(os.path.join(output_dir, saved_model_name) + '_generator')
-            self.GAN = keras.models.load_model(os.path.join(output_dir, saved_model_name) + '_GAN')
+            self.generator = keras.models.load_model(
+                os.path.join(output_dir, saved_model_name) + '_generator')
+            self.GAN = keras.models.load_model(
+                os.path.join(output_dir, saved_model_name) + '_GAN')
             # Extract the discriminator from the GAN
             self.discriminator = self.GAN.layers[-1]
             self.discriminator.trainable = True
@@ -259,12 +283,14 @@ class AnimalGAN:
 
             if output_dir is not None and model_name is not None:
                 self.GAN.save(f"{output_dir}/{model_name}_epoch_{e+1}_GAN")
-                self.generator.save(f"{output_dir}/{model_name}_epoch_{e+1}_generator")
+                self.generator.save(
+                    f"{output_dir}/{model_name}_epoch_{e+1}_generator")
                 # Delete the previous model, if it exists
                 if os.path.exists(f"{output_dir}/{model_name}_epoch_{e}_GAN"):
                     shutil.rmtree(f"{output_dir}/{model_name}_epoch_{e}_GAN")
                 if os.path.exists(f"{output_dir}/{model_name}_epoch_{e}_generator"):
-                    shutil.rmtree(f"{output_dir}/{model_name}_epoch_{e}_generator")
+                    shutil.rmtree(
+                        f"{output_dir}/{model_name}_epoch_{e}_generator")
 
             print(f"Discriminator loss: {discriminator_loss_1[-1]}")
             print(f"Discriminator loss: {discriminator_loss_2[-1]}")
