@@ -57,10 +57,11 @@ class AnimalGAN:
             3, (5, 5), strides=(2, 2), padding='same', activation='tanh'))
         return model
 
-    def __build_discriminator(self, input_shape: tuple) -> keras.Model:
+    def __build_discriminator(self, input_shape: tuple, num_classes: int) -> keras.Model:
         """
-        Build the discriminator network.
+        Build the conditional discriminator network.
 
+        This accepts a label and an image as input and outputs a single value.
         The network consists of four convolutional layers (Conv + MaxPool)
         followed by a fully connected layer. This discriminator is used to
         distinguish between real and fake images.
@@ -69,45 +70,42 @@ class AnimalGAN:
         layers.
 
         param input_shape: The shape of the input.
+        param num_classes: The number of classes.
         return: The discriminator network.
         """
-
-        model = keras.Sequential()
-
-        model.add(keras.layers.Input(shape=input_shape))
+        # The label of our class
+        label_input = keras.layers.Input(shape=(1,), name='label_input')
+        # Put the label into an embedding layer
+        embedding = keras.layers.Embedding(
+            num_classes, self.latent_dim)(label_input)
+        dense = keras.layers.Dense(input_shape[0], input_shape[1], 1)(embedding)
+        # Concatenate the label with the image
+        model_input = keras.layers.Input(shape=input_shape)
+        merged = keras.layers.concatenate([model_input, dense])
 
         # First convolutional layer
-        model.add(keras.layers.Conv2D(filters=64,
-                                      kernel_size=(5, 5),
-                                      padding='same'))
-        model.add(keras.layers.LeakyReLU(alpha=0.2))
-        model.add(keras.layers.MaxPool2D(pool_size=(2, 2)))
-
+        conv1 = keras.layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same')(merged)
+        conv1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
+        pool1 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2))(conv1)
         # Second convolutional layer
-        model.add(keras.layers.Conv2D(filters=64,
-                                      kernel_size=(5, 5),
-                                      padding='same'))
-        model.add(keras.layers.LeakyReLU(alpha=0.2))
-        model.add(keras.layers.MaxPool2D(pool_size=(2, 2)))
-
+        conv2 = keras.layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same')(pool1)
+        conv2 = keras.layers.LeakyReLU(alpha=0.2)(conv2)
+        pool2 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2))(conv2)
         # Third convolutional layer
-        model.add(keras.layers.Conv2D(filters=128,
-                                      kernel_size=(5, 5),
-                                      padding='same'))
-        model.add(keras.layers.LeakyReLU(alpha=0.2))
-        model.add(keras.layers.MaxPool2D(pool_size=(2, 2)))
-
+        conv3 = keras.layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same')(pool2)
+        conv3 = keras.layers.LeakyReLU(alpha=0.2)(conv3)
+        pool3 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2))(conv3)
         # Fourth convolutional layer
-        model.add(keras.layers.Conv2D(filters=128,
-                                      kernel_size=(5, 5),
-                                      padding='same'))
-        model.add(keras.layers.LeakyReLU(alpha=0.2))
-        model.add(keras.layers.MaxPool2D(pool_size=(2, 2)))
+        conv4 = keras.layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same')(pool3)
+        conv4 = keras.layers.LeakyReLU(alpha=0.2)(conv4)
+        pool4 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2))(conv4)
+        # Flatten the output
+        flat = keras.layers.Flatten()(pool4)
+        dropout = keras.layers.Dropout(0.4)(flat)
+        # Fully connected layer
+        out = keras.layers.Dense(1, activation='sigmoid')(flat)
 
-        model.add(keras.layers.Flatten())
-        model.add(keras.layers.Dropout(0.4))
-        model.add(keras.layers.Dense(1, activation='sigmoid'))
-
+        model = keras.Model(inputs=[model_input, label_input], outputs=out)
         opt = keras.optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
         model.compile(loss='binary_crossentropy',
                       optimizer=opt,
@@ -171,10 +169,12 @@ class AnimalGAN:
         images = None
     
         for image, _ in images_batch:
-            image =  (image - 127.5) / 127.5
+            image =  image / 255.0
             images = image if images is None else np.concatenate((images, image))
 
-        labels = np.ones((images.shape[0], 1))
+        # Put some noise in the labels (random number between 0.9 and 1)
+        labels = np.random.random(size=(images.shape[0], 1)) * 0.1 + 0.9
+        # labels = np.ones((images.shape[0], 1))
         return images, labels
 
     def __get_fake_samples(self, n):
@@ -190,7 +190,10 @@ class AnimalGAN:
         # Generate fake images
         images = self.generator.predict(latent_vector)
         # Create labels for the images
-        labels = np.zeros((n, 1))
+        # Put some noise in the labels (random number between 0 an 0.1)
+        labels = np.random.random(size=(n, 1)) * 0.1
+
+        # labels = np.zeros((n, 1))
         return images, labels
 
     def train(self, training_images_dir: str,
@@ -198,7 +201,7 @@ class AnimalGAN:
               output_dir: str = './output',
               continue_training: bool = False,
               starting_epoch: int = 0,
-              saved_model_dir: str = None,
+              saved_model_name: str = None,
               model_name: str = None,
               plot_loss: bool = True,
               save_images: bool = True) -> None:
@@ -212,7 +215,7 @@ class AnimalGAN:
         param: output_dir: The directory to save the output (images and models).
         param: continue_training: Whether to continue training from a previous model.
         param: starting_epoch: The epoch to start training from (this is just for the file name)
-        param: saved_model_dir: The directory containing the saved model. Only used if continue_training is True.
+        param: saved_model_name: The name of the saved model to restart training from. Only used if continue_training is True. Should be in output_dir.
         param: model_name: The name of the model. This will have the current epoch appended to it. Only the last model will be kept.
         param: plot_loss: Whether to plot the loss (of the last batch in each epoch). Defaults to True.
         param: save_images: Whether to save an example image at the end of each epoch. Defaults to True.
@@ -228,8 +231,8 @@ class AnimalGAN:
 
         if continue_training:
             # Load the saved models
-            self.generator = keras.models.load_model(os.path.join(saved_model_dir, model_name + '_generator.h5'))
-            self.GAN = keras.models.load_model(os.path.join(saved_model_dir, model_name + '_GAN.h5'))
+            self.generator = keras.models.load_model(os.path.join(output_dir, saved_model_name) + '_generator')
+            self.GAN = keras.models.load_model(os.path.join(output_dir, saved_model_name) + '_GAN')
             # Extract the discriminator from the GAN
             self.discriminator = self.GAN.layers[-1]
             self.discriminator.trainable = True
@@ -281,4 +284,4 @@ class AnimalGAN:
         """
 
         latent_vector = self.__latent_samples(1)
-        return self.generator.predict(latent_vector)[0]/2+0.5
+        return self.generator.predict(latent_vector)[0]
