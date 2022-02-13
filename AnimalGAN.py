@@ -65,12 +65,11 @@ class AnimalGAN:
         label_input = keras.layers.Input(shape=(1,), name='label_input_gen')
         # Put the label into an embedding layer
         embedding = keras.layers.Embedding(
-            self.num_classes, latent_dim)(label_input)
+            self.num_classes, latent_dim, name='label_embedding')(label_input)
         dense = keras.layers.Dense(
-            initial_shape[0]*initial_shape[1])(embedding)
+            initial_shape[0]*initial_shape[1], name='dense_label')(embedding)
         dense = keras.layers.Reshape(
             (initial_shape[0], initial_shape[1], 1))(dense)
-
         # Concatenate the label with the latent vector
         latent_input = keras.layers.Input(
             shape=(latent_dim,), name='latent_input_gen')
@@ -91,7 +90,7 @@ class AnimalGAN:
             filters=32, kernel_size=2, strides=2, padding='same', activation='sigmoid')(convtr1)
         print("Conv 2: ", convtr2.shape)
         convtr3 = keras.layers.Conv2DTranspose(
-            filters=16, kernel_size=2, strides=2, padding='same', activation='sigmoid')(convtr2)
+            filters=3, kernel_size=2, strides=1, padding='same', activation='sigmoid')(convtr2)
         print("Conv 3: ", convtr3.shape)
 
         # Return the model
@@ -113,17 +112,21 @@ class AnimalGAN:
         return: The discriminator network.
         """
         # The label of our class
-        label_input = keras.layers.Input(shape=(1,), name='label_input')
+        label_input = keras.layers.Input(shape=(1,), name='discr_label_input')
         # Put the label into an embedding layer
         embedding = keras.layers.Embedding(
-            self.num_classes, self.latent_dim)(label_input)
+            self.num_classes, self.latent_dim, name='discr_label_embed')(label_input)
         dense = keras.layers.Dense(
             input_shape[0] * input_shape[1])(embedding)
+        print("Dense: ", dense.shape)
         dense = keras.layers.Reshape(
             (input_shape[0], input_shape[1], 1))(dense)
+        print(f"Dense: {dense.shape}")
         # Concatenate the label with the image
-        model_input = keras.layers.Input(shape=input_shape)
+        model_input = keras.layers.Input(shape=input_shape, name='discr_input')
+        print(f"Input: {model_input.shape}")
         concat = keras.layers.Concatenate()([model_input, dense])
+        print(f"Concat: {concat.shape}")
         # First convolutional layer
         conv1 = keras.layers.Conv2D(
             64, (5, 5), padding='same',
@@ -190,13 +193,24 @@ class AnimalGAN:
         gen_noise, gen_label = generator.input
         gen_output = generator.output
 
+        output = discriminator([gen_output, gen_label])
+
         model = keras.Model(
-            inputs=[gen_noise, gen_label], outputs=gen_output)
+            inputs=[gen_noise, gen_label], outputs=output)
 
         opt = keras.optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
         model.compile(loss='binary_crossentropy', optimizer=opt)
 
         return model
+
+    def plot_networks(self):
+        """
+        Plots the generator and discriminator networks to file.
+        """
+
+        keras.utils.plot_model(self.generator, to_file='generator.png')
+        keras.utils.plot_model(self.discriminator, to_file='discriminator.png')
+        keras.utils.plot_model(self.GAN, to_file='GAN.png')
 
     def __latent_samples(self, num_samples: int) -> np.ndarray:
         """
