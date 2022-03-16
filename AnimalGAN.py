@@ -5,6 +5,8 @@ import tensorflow.keras as keras
 from tqdm import tqdm
 import shutil
 import pandas as pd
+import datetime
+
 
 class AnimalGAN:
     """
@@ -28,6 +30,7 @@ class AnimalGAN:
         param verbose: Whether to output verbose information. Default is False.
         """
 
+        self.verbose = verbose
         self.latent_dim = latent_dim
         self.batch_size = batch_size
 
@@ -48,6 +51,15 @@ class AnimalGAN:
                                                 generator_initial_shape)
 
         self.GAN = self.__build_GAN(self.generator, self.discriminator)
+
+    def __print(self, string):
+        """
+        Print a string if verbose is True.
+
+        param string: The string to print.
+        """
+        if self.verbose:
+            print(string)
 
     def __build_generator(self, latent_dim, initial_shape):
         """
@@ -80,18 +92,19 @@ class AnimalGAN:
 
         concatenated = keras.layers.concatenate([dense, dense2])
 
-        print("Generator input shape (concatenated): ", concatenated.shape)
+        self.__print(
+            f"Generator input shape (concatenated): {concatenated.shape}")
 
         # Upsample using Conv2DTranspose
         convtr1 = keras.layers.Conv2DTranspose(
             filters=64, kernel_size=2, strides=2, padding='same')(concatenated)
-        print("Conv 1: ", convtr1.shape)
+        self.__print(f"Conv 1: {convtr1.shape}")
         convtr2 = keras.layers.Conv2DTranspose(
             filters=32, kernel_size=2, strides=2, padding='same', activation='sigmoid')(convtr1)
-        print("Conv 2: ", convtr2.shape)
+        self.__print(f"Conv 2: {convtr2.shape}")
         convtr3 = keras.layers.Conv2DTranspose(
             filters=3, kernel_size=2, strides=1, padding='same', activation='sigmoid')(convtr2)
-        print("Conv 3: ", convtr3.shape)
+        self.__print(f"Conv 3: {convtr3.shape}")
 
         # Return the model
         return keras.models.Model(inputs=[latent_input, label_input], outputs=convtr3)
@@ -118,49 +131,49 @@ class AnimalGAN:
             self.num_classes, self.latent_dim, name='discr_label_embed')(label_input)
         dense = keras.layers.Dense(
             input_shape[0] * input_shape[1])(embedding)
-        print("Dense: ", dense.shape)
+        self.__print(f"Dense: {dense.shape}")
         dense = keras.layers.Reshape(
             (input_shape[0], input_shape[1], 1))(dense)
-        print(f"Dense: {dense.shape}")
+        self.__print(f"Dense Reshape: {dense.shape}")
         # Concatenate the label with the image
         model_input = keras.layers.Input(shape=input_shape, name='discr_input')
-        print(f"Input: {model_input.shape}")
+        self.__print(f"Discriminator input shape: {model_input.shape}")
         concat = keras.layers.Concatenate()([model_input, dense])
-        print(f"Concat: {concat.shape}")
+        self.__print(f"Concatenated: {concat.shape}")
         # First convolutional layer
         conv1 = keras.layers.Conv2D(
             64, (5, 5), padding='same',
             name='discr_conv1')(concat)
         conv1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
-        print(f"Conv1 - {conv1.shape}")
+        self.__print(f"Conv 1: {conv1.shape}")
         pool1 = keras.layers.MaxPooling2D((2, 2),
                                           name='discr_pool1')(conv1)
-        print(f"Pool1 - {pool1.shape}")
+        self.__print(f"Pool 1: {pool1.shape}")
         # Second convolutional layer
         conv2 = keras.layers.Conv2D(
             64, (3, 3), padding='same',
             name='discr_conv2')(pool1)
         conv2 = keras.layers.LeakyReLU(alpha=0.2)(conv2)
-        print(f"Conv2 - {conv2.shape}")
+        self.__print(f"Conv 2: {conv2.shape}")
         pool2 = keras.layers.MaxPooling2D((2, 2), name='discr_pool2')(conv2)
-        print(f"Pool2 - {pool2.shape}")
+        self.__print(f"Pool 2: {pool2.shape}")
         # Third convolutional layer
         conv3 = keras.layers.Conv2D(
             128, (3, 3), padding='same',
             name='discr_conv3')(pool2)
         conv3 = keras.layers.LeakyReLU(alpha=0.2)(conv3)
-        print(f"Conv3 - {conv3.shape}")
+        self.__print(f"Conv 3: {conv3.shape}")
         pool3 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2),
                                           name='discr_pool3')(conv3)
-        print(f"Pool3 - {pool3.shape}")
+        self.__print(f"Pool 3: {pool3.shape}")
         # # Fourth convolutional layer
         # conv4 = keras.layers.Conv2D(
         #     128, (3, 3), padding='same', name = 'discr_conv4')(pool3)
         # conv4 = keras.layers.LeakyReLU(alpha=0.2)(conv4)
-        # print(f"Conv4 - {conv4.shape}")
+        # self.__print(f"Conv 4: {conv4.shape}")
         # pool4 = keras.layers.MaxPooling2D((2, 2), strides=(2, 2),
         #     name = 'discr_pool4')(conv4)
-        # print(f"Pool4 - {pool4.shape}")
+        # self.__print(f"Pool 4: {pool4.shape}")
         # Flatten the output
         flat = keras.layers.Flatten()(pool3)
         dropout = keras.layers.Dropout(0.4)(flat)
@@ -226,9 +239,9 @@ class AnimalGAN:
         """
         Print the model summary.
         """
-        print(self.discriminator.summary())
-        print(self.generator.summary())
-        print(self.GAN.summary())
+        self.__print(self.discriminator.summary())
+        self.__print(self.generator.summary())
+        self.__print(self.GAN.summary())
 
     def __get_real_samples(self):
         """
@@ -280,7 +293,8 @@ class AnimalGAN:
               starting_epoch: int = 0,
               saved_model_name: str = None,
               model_name: str = None,
-              save_images: bool = True) -> None:
+              save_images: bool = True,
+              plot_losses: bool = True) -> None:
         """
         Train the GAN.
         This first trains the discriminator, then trains the generator (by training the whole GAN, with the discriminator frozen).
@@ -292,6 +306,7 @@ class AnimalGAN:
         param: saved_model_name: The name of the saved model to restart training from. Only used if continue_training is True. Should be in output_dir.
         param: model_name: The name of the model. This will have the current epoch appended to it. Only the last model will be kept.
         param: save_images: Whether to save an example image at the end of each epoch. Defaults to True.
+        param: plot_losses: Whether to save the plot of the losses at the end of training. Defaults to True.
         """
 
         if continue_training:
@@ -321,7 +336,7 @@ class AnimalGAN:
                 generator_loss = self.GAN.train_on_batch(
                     [X_gan, labels_gan], y_gan)
 
-            # Save the losses
+            # Save the losses in the dataframe
             losses.loc[e] = [discriminator_loss_1, discriminator_loss_2,
                              generator_loss]
 
@@ -338,6 +353,16 @@ class AnimalGAN:
             if save_images:
                 image = self.generate_image()
                 plt.imsave(f"{output_dir}/GAN_output_epoch_{e}.png", image)
+
+            if plot_losses:
+                plt.plot(losses['d_loss_real'],
+                         label='Discriminator loss - real samples')
+                plt.plot(losses['d_loss_fake'],
+                         label='Discriminator loss - fake samples')
+                plt.plot(losses['g_loss'], label='Generator loss')
+                plt.legend()
+                plt.show()
+                plt.savefig(f"{output_dir}/GAN_losses_{datetime.now()}.png")
 
             if output_dir is not None and model_name is not None:
                 self.GAN.save(f"{output_dir}/{model_name}_epoch_{e+1}_GAN")
