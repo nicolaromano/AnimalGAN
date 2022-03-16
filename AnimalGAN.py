@@ -1,12 +1,10 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow.keras as keras
 from tqdm import tqdm
 import shutil
-
+import pandas as pd
 
 class AnimalGAN:
     """
@@ -18,7 +16,8 @@ class AnimalGAN:
                  input_shape: tuple,
                  training_images_dir: str,
                  batch_size: int = 32,
-                 latent_dim: int = 100):
+                 latent_dim: int = 100,
+                 verbose: bool = False):
         """
         Initialize the GAN.
 
@@ -26,6 +25,7 @@ class AnimalGAN:
         param: training_images_dir: The directory containing the training images.
         param: batch_size: The batch size to use. Default is 32.
         param latent_dim: The latent vector dimension. Default is 100.
+        param verbose: Whether to output verbose information. Default is False.
         """
 
         self.latent_dim = latent_dim
@@ -267,7 +267,7 @@ class AnimalGAN:
         # Generate a latent vector
         latent_vector, class_labels = self.__latent_samples(n)
         # Generate fake images
-        images = self.generator.predict(latent_vector)
+        images = self.generator.predict([latent_vector, class_labels])
         # These are fake images, so they are coded as 0.
         # We are adding some noise (random number between 0 and 0.1)
         y = np.random.random(size=(n, 1)) * 0.1
@@ -304,6 +304,8 @@ class AnimalGAN:
             self.discriminator = self.GAN.layers[-1]
             self.discriminator.trainable = True
 
+        losses = pd.DataFrame(columns=['d_loss_real', 'd_loss_fake', 'g_loss'])
+
         for e in range(starting_epoch, starting_epoch + epochs):
             print(f"Epoch {e+1}/{epochs}")
             for _ in range(len(self.train_ds)):
@@ -313,15 +315,26 @@ class AnimalGAN:
                 [X_fake, labels_fake], y_fake = self.__get_fake_samples(
                     batch_size // 2)
                 discriminator_loss_2, _ = self.discriminator.train_on_batch(
-                    X_fake, y_fake)
+                    [X_fake, labels_fake], y_fake)
                 [X_gan, labels_gan] = self.__latent_samples(batch_size)
                 y_gan = np.random.random(size=(batch_size, 1)) * 0.1 + 0.9
                 generator_loss = self.GAN.train_on_batch(
                     [X_gan, labels_gan], y_gan)
-                print(
-                    f"Discriminator loss: {discriminator_loss_1}/{discriminator_loss_2}")
-                print(f"Generator loss: {generator_loss}")
 
+            # Save the losses
+            losses.loc[e] = [discriminator_loss_1, discriminator_loss_2,
+                             generator_loss]
+
+            # Save the generator and discriminator models
+            if model_name is not None:
+                self.generator.save(
+                    os.path.join(output_dir, model_name + f"_{e+1}.h5"))
+                self.discriminator.save(
+                    os.path.join(output_dir, model_name + f"_{e+1}_discriminator.h5"))
+                self.GAN.save(
+                    os.path.join(output_dir, model_name + f"_{e+1}_GAN.h5"))
+
+            # Save some images
             if save_images:
                 image = self.generate_image()
                 plt.imsave(f"{output_dir}/GAN_output_epoch_{e}.png", image)
